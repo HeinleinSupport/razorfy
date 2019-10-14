@@ -1,4 +1,4 @@
-# Razorfy - oletools verify over TCP socket
+# Razorfy - razor verify over TCP socket
 
 Small Perl Daemon to use razor over TCP sockets. Mainly to use razor in [Rspamd](https://github.com/rspamd/rspamd).
 
