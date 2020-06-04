@@ -27,7 +27,7 @@ use Razor2::Client::Agent;
 # set to 1 to enable debug logging
 my $debug = defined($ENV{'RAZORFY_DEBUG'}) ? $ENV{'RAZORFY_DEBUG'} : 0;
 # max number of threa to use
-my $maxthreads = defined($ENV{'RAZORFY_MAXTHREADS'}) ? $ENV{'RAZORFY_MAXTHREADS'} : 2000;
+my $maxthreads = defined($ENV{'RAZORFY_MAXTHREADS'}) ? $ENV{'RAZORFY_MAXTHREADS'} : 200;
 # bind razorfy to a local ip address - use 0.0.0.0 for all
 my $bindaddress = defined($ENV{'RAZORFY_BINDADDRESS'}) ? $ENV{'RAZORFY_BINDADDRESS'} : '127.0.0.1';
 # tcp port to use
@@ -74,12 +74,19 @@ sub Main
 			# Push new client connection to it's own thread
 			push ( @clients, threads->create( \&clientHandler, $client_socket ) );
 			ErrorLog(  "active threads: $#threads") if $debug ;
+			ErrorLog(  "client array length: " . scalar @clients) if $debug ;
+
+			my $counter = 0;
 			foreach ( @clients )
 			{
 				if( $_->is_joinable() ) {
-		    		$_->join();
-		    	}
+		    	$_->join();
 		    }
+				if( not $_->is_running() ) {
+					splice(@clients,$counter,1);
+				}
+				$counter++;
+			}
 		}
 	}
 	$socket->close();
