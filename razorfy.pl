@@ -114,7 +114,7 @@ sub ErrorLog {
 setlocale(&POSIX::LC_ALL, "en_US");
   my $msg = shift;
   my $datestring = strftime "%b %e %H:%M:%S", localtime;
-  print STDERR $datestring." ".$msg."\n";
+  print STDERR $msg."\n";
 }
 
 # Start the Main loop
