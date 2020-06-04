@@ -1,7 +1,8 @@
 #!/usr/bin/perl
 
-# Copyright (c) 2019, Mirko Ludeke <m.ludeke@heinlein-support.de>
-# Copyright (c) 2019, Carsten Rosenberg <c.rosenberg@heinlein-support.de>
+# Copyright (c) 2020, Mirko Ludeke <m.ludeke@heinlein-support.de>
+# Copyright (c) 2020, Carsten Rosenberg <c.rosenberg@heinlein-support.de>
+# Copyright (c) 2020, Andreas Boesen <boesen@belwue.de>
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,7 +18,7 @@
 
 use strict;
 use warnings;
-use IO::Socket::INET;
+use IO::Socket::IP;
 use IO::Select;
 use threads;
 use Data::Dumper;
@@ -28,7 +29,8 @@ use Razor2::Client::Agent;
 my $debug = defined($ENV{'RAZORFY_DEBUG'}) ? $ENV{'RAZORFY_DEBUG'} : 0;
 # max number of threa to use
 my $maxthreads = defined($ENV{'RAZORFY_MAXTHREADS'}) ? $ENV{'RAZORFY_MAXTHREADS'} : 200;
-# bind razorfy to a local ip address - use 0.0.0.0 for all
+# bind razorfy to default to local ip address
+# use :: for all (dual stack), 0.0.0.0 (all ipv4), ::1 localhost v6only, 127.0.0.1 localhost ipv4
 my $bindaddress = defined($ENV{'RAZORFY_BINDADDRESS'}) ? $ENV{'RAZORFY_BINDADDRESS'} : '127.0.0.1';
 # tcp port to use
 my $bindport 	= defined($ENV{'RAZORFY_BINDPORT'}) ? $ENV{'RAZORFY_BINDPORT'} : '11342';
@@ -47,12 +49,12 @@ sub Main
 	my ( $socket, $client_socket );
 
 	# Bind to listening address and port
-	$socket = new IO::Socket::INET (
+	$socket = new IO::Socket::IP (
 		LocalHost => $bindaddress,
 		LocalPort => $bindport,
-		Proto => 'tcp',
-		Listen => 10,
-		Reuse => 1
+		Proto     => 'tcp',
+		Listen    => 10,
+		ReuseAddr => 1
 	) or die "Could not open socket: ".$!."\n";
 
 	ErrorLog( "RAZORFY started, PID: $$ Waiting for client connections...");
@@ -73,6 +75,7 @@ sub Main
 
 			# Push new client connection to it's own thread
 			push ( @clients, threads->create( \&clientHandler, $client_socket ) );
+
 			ErrorLog(  "active threads: $#threads") if $debug ;
 			ErrorLog(  "client array length: " . scalar @clients) if $debug ;
 
