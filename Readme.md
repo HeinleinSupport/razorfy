@@ -24,16 +24,16 @@ The Perl Razor package is able to return more detailed results. We will maybe al
 
 # Default Installation
 
-## Install Perl razor
+## Install Perl razor and perl-IO-Socket-IP
 
--   use cpan, apt, yum, zypper or the source to install the Perl version of razor
-
-~~~
-apt install razor
-~~~
+-   use cpan, apt, yum, zypper or the source to install the Perl version of razor and perl-IO-Socket-IP
 
 ~~~
-yum install perl-Razor-Agent
+apt install razor libio-socket-ip-perl
+~~~
+
+~~~
+yum install perl-Razor-Agent perl-IO-Socket-IP
 ~~~
 
 ## Install razorfy
