@@ -18,7 +18,6 @@ ExecStop=/bin/kill $MAINPID
 
 Restart=always
 RestartSec=3
-RuntimeMaxSec=4h
 
 PIDFile=/var/run/razor.pid
 TimeoutStopSec=30
