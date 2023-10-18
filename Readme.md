@@ -9,7 +9,7 @@ please report any issues.
 
 ## How it works
 
-razorfy expects raw mails to be send to the TCP socket. razorfy checks the mail against the Razor packages and returns ham or spam
+razorfy expects raw mails to be sent to the TCP socket. razorfy checks the mail against the Razor packages and returns ham or spam.
 
 ## Future plans
 
