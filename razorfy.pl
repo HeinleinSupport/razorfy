@@ -22,7 +22,7 @@ use IO::Socket::IP;
 use IO::Select;
 use threads;
 use Data::Dumper;
-use POSIX qw(setlocale strftime);
+use POSIX qw(setlocale);
 use Razor2::Client::Agent;
 
 
@@ -130,14 +130,8 @@ sub clientHandler
 
 sub ErrorLog
 {
-    # TODO:
-    # "my $datestring ..." is not used anymore in "print STDERR..." below.
-    # delete the line?
-    # also should the "setlocale(...);" line and the "use POSIX qw(setlocale strftime);" line at the top be removed as well?
-
     setlocale(&POSIX::LC_ALL, "en_US");
     my $msg = shift;
-    # my $datestring = strftime "%b %e %H:%M:%S", localtime;
     print STDERR $msg."\n";
 }
 
