@@ -59,6 +59,35 @@ Have a look to the commented razorfy.conf.
 
 Set `RAZORFY_DEBUG=1` and have a look to the logs `journalctl -u razorfy`
 
+# Development
+For development it's recommended to create a virtual environment with a thread capable perl using [perlbrew](https://perlbrew.pl/).
+
+## Initialize environment
+```
+perlbrew --notest install perl-5.38.2 --as=perl-5.38.2t -Dusethreads
+perlbrew lib create perl-5.38.2t@razorfy
+perlbrew use perl-5.38.2t@razorfy
+perlbrew install-cpanm
+cpanm --with-develop --installdeps .
+```
+
+## Enable environment in this terminal
+```
+perlbrew use perl-5.38.2t@razorfy
+```
+
+## Disable environment
+```
+perlbrew switch-off
+```
+
+## See if environment is set
+```
+perlbrew switch
+```
+
+
+
 # License
 
 Apache-2.0
