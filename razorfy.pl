@@ -39,12 +39,14 @@ my $bindaddress = defined($ENV{'RAZORFY_BINDADDRESS'}) ? $ENV{'RAZORFY_BINDADDRE
 # tcp port to use
 my $bindport    = defined($ENV{'RAZORFY_BINDPORT'}) ? $ENV{'RAZORFY_BINDPORT'} : '11342';
 
+# How should emails be classsified if razor breaks?
+my $classification_when_razor_errors = defined($ENV{'CLASSIFICATION_WHEN_RAZOR_ERRORS'}) ? $ENV{'CLASSIFICATION_WHEN_RAZOR_ERRORS'} : 'ham';
 
 my $agent = new Razor2::Client::Agent('razor-check') or die ;
     $agent->read_options() or die $agent->errstr ."\n";
     $agent->do_conf()      or die $agent->errstr ."\n";
 
-my %logret = ( 0 => 'spam', 1 => 'ham' );
+my %logret = ( 0 => 'spam', 1 => 'ham', 2 => 'error' );
 
 sub Main
 {
@@ -120,7 +122,21 @@ sub clientHandler
     $hashr{'fh'} = $client_socket;
 
     my $ret = $agent->checkit(\%hashr);
-    print $client_socket ( $ret == 0 ) ? "spam" : "ham";
+    my $string;
+
+    # If Razor2::Client::Agent returned an error, usually EXIT_CODE 2 but to be sure classify everything except 0 and 1 as an error.
+    if ( $ret > 1 or $ret < 0 )
+    {
+        $string = $classification_when_razor_errors;
+        ErrorLog("Razor2::Client::Agent returned Error! See the Razor2::Client::Agent Log for details. EXIT_CODE of Razor2::Client::Agent equals '$ret'. The E-Mail has been classified as '$classification_when_razor_errors' as defined in your razorfy.conf");
+        $ret = 2;
+    }
+    else
+    {
+        $string = $logret{$ret};
+    }
+
+    print $client_socket $string;
 
     ErrorLog( "return value: ". $logret{$ret} ) if $debug;
 
