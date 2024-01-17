@@ -71,6 +71,9 @@ perlbrew install-cpanm
 cpanm --with-develop --installdeps .
 ```
 
+**Hint:** By using `perlbrew available` you can see the available Perl versions and adapt the previous commands if you wish to develop with another version of Perl.
+
+
 ## Enable environment in this terminal
 ```
 perlbrew use perl-5.38.2t@razorfy
