@@ -12,12 +12,13 @@ User=razorfy
 Group=razorfy
 
 EnvironmentFile=/etc/razorfy.conf
-ExecStart=/usr/local/bin/razorfy.pl
+ExecStart=/usr/bin/perl /usr/local/bin/razorfy.pl
 ExecReload=/bin/kill -HUP $MAINPID
 ExecStop=/bin/kill $MAINPID
 
 Restart=always
 RestartSec=3
+RuntimeMaxSec=1h
 
 PIDFile=/var/run/razor.pid
 TimeoutStopSec=30
