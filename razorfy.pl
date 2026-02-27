@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 
-# Copyright (c) 2023, Mirko Ludeke <m.ludeke@heinlein-support.de>
-# Copyright (c) 2023, Carsten Rosenberg <c.rosenberg@heinlein-support.de>
+# Copyright (c) 2025, Mirko Ludeke <m.ludeke@heinlein-support.de>
+# Copyright (c) 2025, Carsten Rosenberg <c.rosenberg@heinlein-support.de>
 # Copyright (c) 2023, Andreas Boesen <boesen@belwue.de>
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -21,10 +21,16 @@ use warnings;
 use IO::Socket::IP;
 use IO::Select;
 use threads;
+use threads::shared;
 use Data::Dumper;
-use POSIX qw(setlocale);
+use POSIX qw(setlocale strftime);
+use Time::HiRes qw(gettimeofday tv_interval);
 use Razor2::Client::Agent;
 
+sub generate_request_id
+{
+    return sprintf("%08x", int(rand(0xFFFFFFFF)));
+}
 
 # set to 1 to enable debug logging
 my $debug       = defined($ENV{'RAZORFY_DEBUG'}) ? $ENV{'RAZORFY_DEBUG'} : 0;
@@ -39,10 +45,82 @@ my $bindaddress = defined($ENV{'RAZORFY_BINDADDRESS'}) ? $ENV{'RAZORFY_BINDADDRE
 # tcp port to use
 my $bindport    = defined($ENV{'RAZORFY_BINDPORT'}) ? $ENV{'RAZORFY_BINDPORT'} : '11342';
 
+# razor home directory (default: ~/.razorfy)
+my $razorhome   = defined($ENV{'RAZORFY_RAZORHOME'}) ? $ENV{'RAZORFY_RAZORHOME'} : "$ENV{'HOME'}/.razorfy";
 
-my $agent = new Razor2::Client::Agent('razor-check') or die ;
-    $agent->read_options() or die $agent->errstr ."\n";
+# stats interval in seconds (default: 900 = 15 min)
+my $stats_interval = defined($ENV{'RAZORFY_STATS_INTERVAL'}) ? $ENV{'RAZORFY_STATS_INTERVAL'} : 900;
+
+# shared stats counters
+my $stats_ham :shared    = 0;
+my $stats_spam :shared   = 0;
+my $stats_error :shared  = 0;
+my $stats_total_time :shared = 0;
+my $stats_min_time :shared   = 0;
+my $stats_max_time :shared   = 0;
+
+
+sub record_stats
+{
+    my ($result, $elapsed) = @_;
+    lock($stats_ham);
+    lock($stats_spam);
+    lock($stats_error);
+    lock($stats_total_time);
+    lock($stats_min_time);
+    lock($stats_max_time);
+
+    if    ($result eq 'spam')  { $stats_spam++; }
+    elsif ($result eq 'ham')   { $stats_ham++; }
+    else                       { $stats_error++; }
+
+    $stats_total_time += $elapsed;
+    my $total = $stats_ham + $stats_spam + $stats_error;
+    if ($total == 1 || $elapsed < $stats_min_time) { $stats_min_time = $elapsed; }
+    if ($elapsed > $stats_max_time) { $stats_max_time = $elapsed; }
+}
+
+sub maybe_print_stats
+{
+    my ($last_stats_time) = @_;
+    my $now = time();
+    return $last_stats_time if ($now - $last_stats_time) < $stats_interval;
+
+    my ($ham, $spam, $error, $total_time, $min_time, $max_time);
+    {
+        lock($stats_ham); lock($stats_spam); lock($stats_error);
+        lock($stats_total_time); lock($stats_min_time); lock($stats_max_time);
+        $ham = $stats_ham;   $stats_ham = 0;
+        $spam = $stats_spam; $stats_spam = 0;
+        $error = $stats_error; $stats_error = 0;
+        $total_time = $stats_total_time; $stats_total_time = 0;
+        $min_time = $stats_min_time; $stats_min_time = 0;
+        $max_time = $stats_max_time; $stats_max_time = 0;
+    }
+
+    my $total = $ham + $spam + $error;
+    my $avg_time = $total > 0 ? $total_time / $total : 0;
+
+    ErrorLog(sprintf(
+        "STATS period=%ds total=%d ham=%d spam=%d error=%d avg=%.3fs min=%.3fs max=%.3fs",
+        $stats_interval, $total, $ham, $spam, $error, $avg_time, $min_time, $max_time
+    ));
+
+    return $now;
+}
+
+sub create_agent
+{
+    my $agent = new Razor2::Client::Agent('razor-check') or die "Failed to create Razor2 agent";
+    my %read_opts;
+    $read_opts{'home'} = $razorhome if defined $razorhome;
+    $agent->read_options(%read_opts) or die $agent->errstr ."\n";
     $agent->do_conf()      or die $agent->errstr ."\n";
+    return $agent;
+}
+
+# Validate that agent creation works at startup
+create_agent();
 
 my %logret = ( 0 => 'spam', 1 => 'ham', 2 => 'error' );
 
@@ -63,6 +141,15 @@ sub Main
     ) or die "Could not open socket: ".$!."\n";
 
     ErrorLog( "RAZORFY started, PID: $$ Waiting for client connections..." );
+    ErrorLog( "  bind_address: $bindaddress" );
+    ErrorLog( "  bind_port:    $bindport" );
+    ErrorLog( "  max_threads:  $maxthreads" );
+    ErrorLog( "  razorhome:    $razorhome" );
+    ErrorLog( "  debug:        $debug" );
+    ErrorLog( "  stats_interval: ${stats_interval}s" );
+
+    my $last_stats_time = time();
+    my $last_thread_warn_time = 0;
 
     my @clients = ();
 
@@ -71,6 +158,14 @@ sub Main
     {
         # Limit threads
         my @threads = threads->list(threads::running);
+
+        # Warn when more than 90% of max threads are active (at most once per minute)
+        if ($#threads >= int($maxthreads * 0.9) && (time() - $last_thread_warn_time) >= 60)
+        {
+            ErrorLog(sprintf("WARNING: thread usage high: %d/%d active threads (%.0f%%)",
+                $#threads, $maxthreads, ($#threads / $maxthreads) * 100));
+            $last_thread_warn_time = time();
+        }
 
         if( $#threads < $maxthreads )
         {
@@ -82,6 +177,8 @@ sub Main
 
             ErrorLog(  "active threads: $#threads") if $debug ;
             ErrorLog(  "client array length: " . scalar @clients) if $debug ;
+
+            $last_stats_time = maybe_print_stats($last_stats_time);
 
             my $counter = 0;
             foreach ( @clients )
@@ -108,25 +205,54 @@ sub clientHandler
 {
     # Socket is passed to thread as first (and only) argument.
     my ($client_socket) = @_;
+    my $t0 = [gettimeofday];
+
+    my $req_id = generate_request_id();
 
     # Create hash for user connection/session information and set initial connection information.
     my %user = ();
     $user{peer_address} = $client_socket->peerhost();
     $user{peer_port}    = $client_socket->peerport();
 
-    ErrorLog( "Accepted New Client Connection From:".$user{peer_address}.":".$user{peer_port} ) if $debug;
+    ErrorLog( $req_id, "accepted connection from ".$user{peer_address}.":".$user{peer_port}, $t0 ) if $debug;
 
+    # Create a per-thread agent to avoid thread-safety issues
+    my $thread_agent = create_agent();
+    ErrorLog( $req_id, "agent created", $t0 ) if $debug;
+
+    # Read email data from socket first to isolate read time from check time
+    my $mail_data = '';
+    {
+        local $/;
+        $mail_data = <$client_socket>;
+    }
+    ErrorLog( $req_id, sprintf("mail data read, %d bytes", length($mail_data)), $t0 ) if $debug;
+
+    # Pass data as in-memory filehandle since checkit() requires 'fh'
+    open(my $mem_fh, '<', \$mail_data) or die "Failed to open in-memory filehandle: $!";
     my %hashr;
-    $hashr{'fh'} = $client_socket;
+    $hashr{'fh'} = $mem_fh;
 
-    my $ret = $agent->checkit(\%hashr);
+    my $ret;
     my $string;
 
-    # If Razor2::Client::Agent returned an error, usually EXIT_CODE 2 but to be sure classify everything except 0 and 1 as an error.
-    if ( $ret > 1 or $ret < 0 )
+    # Wrap checkit in eval to catch exceptions (e.g. connection refused to Razor servers)
+    eval {
+        $ret = $thread_agent->checkit(\%hashr);
+    };
+    ErrorLog( $req_id, "checkit done", $t0 ) if $debug;
+
+    if ( $@ )
     {
         $string = 'ham'; # always ham when razor fails to prevent a lot of false positives.
-        ErrorLog("Razor2::Client::Agent returned Error! See the Razor2::Client::Agent Log for details. EXIT_CODE of Razor2::Client::Agent equals '$ret'. The E-Mail has been classified as ham to prevent false positives.");
+        ErrorLog($req_id, "Razor2::Client::Agent threw an exception: $@. The E-Mail has been classified as ham to prevent false positives.", $t0);
+        $ret = 2;
+    }
+    # If Razor2::Client::Agent returned an error, usually EXIT_CODE 2 but to be sure classify everything except 0 and 1 as an error.
+    elsif ( $ret > 1 or $ret < 0 )
+    {
+        $string = 'ham'; # always ham when razor fails to prevent a lot of false positives.
+        ErrorLog($req_id, "Razor2::Client::Agent returned Error! See the Razor2::Client::Agent Log for details. EXIT_CODE of Razor2::Client::Agent equals '$ret'. The E-Mail has been classified as ham to prevent false positives.", $t0);
         $ret = 2;
     }
     else
@@ -136,17 +262,32 @@ sub clientHandler
 
     print $client_socket $string;
 
-    ErrorLog( "return value: ". $logret{$ret} ) if $debug;
+    my $elapsed = tv_interval($t0);
+    record_stats($logret{$ret}, $elapsed);
+    ErrorLog( $req_id, sprintf("result: %s", $logret{$ret}), $t0 ) if $debug;
 
     $client_socket->shutdown(2);
+    ErrorLog( $req_id, "connection closed", $t0 ) if $debug;
     threads->exit();
 }
 
 sub ErrorLog
 {
-    setlocale(&POSIX::LC_ALL, "en_US");
-    my $msg = shift;
-    print STDERR $msg."\n";
+    my ($req_id, $msg, $t0);
+    if (@_ >= 2) {
+        ($req_id, $msg, $t0) = @_;
+    } else {
+        $msg = shift;
+        $req_id = '-';
+    }
+    my ($s, $usec) = gettimeofday;
+    my $timestamp = strftime("%Y-%m-%dT%H:%M:%S", localtime($s)) . sprintf(".%03d", $usec / 1000);
+    my $elapsed_str = '';
+    if (defined $t0) {
+        my $elapsed = tv_interval($t0);
+        $elapsed_str = sprintf(" [%.3fs]", $elapsed);
+    }
+    print STDERR "[$timestamp] [$req_id]$elapsed_str $msg\n";
 }
 
 # Start the Main loop
