@@ -20,10 +20,8 @@ use strict;
 use warnings;
 use IO::Socket::IP;
 use IO::Select;
-use threads;
-use threads::shared;
 use Data::Dumper;
-use POSIX qw(setlocale strftime);
+use POSIX qw(setlocale strftime :sys_wait_h);
 use Time::HiRes qw(gettimeofday tv_interval);
 use Razor2::Client::Agent;
 
@@ -35,8 +33,8 @@ sub generate_request_id
 # set to 1 to enable debug logging
 my $debug       = defined($ENV{'RAZORFY_DEBUG'}) ? $ENV{'RAZORFY_DEBUG'} : 0;
 
-# max number of threa to use
-my $maxthreads  = defined($ENV{'RAZORFY_MAXTHREADS'}) ? $ENV{'RAZORFY_MAXTHREADS'} : 200;
+# max number of worker processes
+my $maxworkers  = defined($ENV{'RAZORFY_MAXTHREADS'}) ? $ENV{'RAZORFY_MAXTHREADS'} : 200;
 
 # bind razorfy by default to v4only localhost address
 # use :: for all (dual stack), 0.0.0.0 for all (v4only), ::1 for localhost (v6only), 127.0.0.1 for localhost (v4only)
@@ -51,24 +49,18 @@ my $razorhome   = defined($ENV{'RAZORFY_RAZORHOME'}) ? $ENV{'RAZORFY_RAZORHOME'}
 # stats interval in seconds (default: 900 = 15 min)
 my $stats_interval = defined($ENV{'RAZORFY_STATS_INTERVAL'}) ? $ENV{'RAZORFY_STATS_INTERVAL'} : 900;
 
-# shared stats counters
-my $stats_ham :shared    = 0;
-my $stats_spam :shared   = 0;
-my $stats_error :shared  = 0;
-my $stats_total_time :shared = 0;
-my $stats_min_time :shared   = 0;
-my $stats_max_time :shared   = 0;
+# stats counters (parent process only)
+my $stats_ham    = 0;
+my $stats_spam   = 0;
+my $stats_error  = 0;
+my $stats_total_time = 0;
+my $stats_min_time   = 0;
+my $stats_max_time   = 0;
 
 
 sub record_stats
 {
     my ($result, $elapsed) = @_;
-    lock($stats_ham);
-    lock($stats_spam);
-    lock($stats_error);
-    lock($stats_total_time);
-    lock($stats_min_time);
-    lock($stats_max_time);
 
     if    ($result eq 'spam')  { $stats_spam++; }
     elsif ($result eq 'ham')   { $stats_ham++; }
@@ -86,17 +78,12 @@ sub maybe_print_stats
     my $now = time();
     return $last_stats_time if ($now - $last_stats_time) < $stats_interval;
 
-    my ($ham, $spam, $error, $total_time, $min_time, $max_time);
-    {
-        lock($stats_ham); lock($stats_spam); lock($stats_error);
-        lock($stats_total_time); lock($stats_min_time); lock($stats_max_time);
-        $ham = $stats_ham;   $stats_ham = 0;
-        $spam = $stats_spam; $stats_spam = 0;
-        $error = $stats_error; $stats_error = 0;
-        $total_time = $stats_total_time; $stats_total_time = 0;
-        $min_time = $stats_min_time; $stats_min_time = 0;
-        $max_time = $stats_max_time; $stats_max_time = 0;
-    }
+    my $ham = $stats_ham;   $stats_ham = 0;
+    my $spam = $stats_spam;  $stats_spam = 0;
+    my $error = $stats_error; $stats_error = 0;
+    my $total_time = $stats_total_time; $stats_total_time = 0;
+    my $min_time = $stats_min_time;     $stats_min_time = 0;
+    my $max_time = $stats_max_time;     $stats_max_time = 0;
 
     my $total = $ham + $spam + $error;
     my $avg_time = $total > 0 ? $total_time / $total : 0;
@@ -129,6 +116,10 @@ sub Main
     # flush after every write
     $| = 1;
 
+    # Create pipe for stats communication from children to parent
+    pipe(my $stats_reader, my $stats_writer) or die "pipe: $!";
+    $stats_writer->autoflush(1);
+
     my ( $socket, $client_socket );
 
     # Bind to listening address and port
@@ -143,59 +134,97 @@ sub Main
     ErrorLog( "RAZORFY started, PID: $$ Waiting for client connections..." );
     ErrorLog( "  bind_address: $bindaddress" );
     ErrorLog( "  bind_port:    $bindport" );
-    ErrorLog( "  max_threads:  $maxthreads" );
+    ErrorLog( "  max_workers:  $maxworkers" );
     ErrorLog( "  razorhome:    $razorhome" );
     ErrorLog( "  debug:        $debug" );
     ErrorLog( "  stats_interval: ${stats_interval}s" );
 
     my $last_stats_time = time();
-    my $last_thread_warn_time = 0;
+    my $last_worker_warn_time = 0;
+    my %children;
+    my $stats_buf = '';
 
-    my @clients = ();
+    my $sel = IO::Select->new($socket, $stats_reader);
 
     # start infinity loop
     while(1)
     {
-        # Limit threads
-        my @threads = threads->list(threads::running);
-
-        # Warn when more than 90% of max threads are active (at most once per minute)
-        if ($#threads >= int($maxthreads * 0.9) && (time() - $last_thread_warn_time) >= 60)
+        # Reap finished children
+        while ((my $pid = waitpid(-1, WNOHANG)) > 0)
         {
-            ErrorLog(sprintf("WARNING: thread usage high: %d/%d active threads (%.0f%%)",
-                $#threads, $maxthreads, ($#threads / $maxthreads) * 100));
-            $last_thread_warn_time = time();
+            delete $children{$pid};
         }
 
-        if( $#threads < $maxthreads )
+        my $child_count = scalar keys %children;
+
+        # Warn when more than 90% of max workers are active (at most once per minute)
+        if ($child_count >= int($maxworkers * 0.9) && (time() - $last_worker_warn_time) >= 60)
         {
-            # Waiting for new client connection.
-            $client_socket = $socket->accept();
+            ErrorLog(sprintf("WARNING: worker usage high: %d/%d active workers (%.0f%%)",
+                $child_count, $maxworkers, ($child_count / $maxworkers) * 100));
+            $last_worker_warn_time = time();
+        }
 
-            # Push new client connection to it's own thread
-            push ( @clients, threads->create( \&clientHandler, $client_socket ) );
+        my @ready = $sel->can_read(1);
 
-            ErrorLog(  "active threads: $#threads") if $debug ;
-            ErrorLog(  "client array length: " . scalar @clients) if $debug ;
-
-            $last_stats_time = maybe_print_stats($last_stats_time);
-
-            my $counter = 0;
-            foreach ( @clients )
+        for my $fh (@ready)
+        {
+            if ($fh == $stats_reader)
             {
-                if( $_->is_joinable() )
+                # Read stats data from children
+                my $data;
+                my $bytes = sysread($stats_reader, $data, 4096);
+                if (defined $bytes && $bytes > 0)
                 {
-                    $_->join();
+                    $stats_buf .= $data;
+                    while ($stats_buf =~ s/^([^\n]*?)\n//)
+                    {
+                        my $line = $1;
+                        my ($result, $elapsed) = split(' ', $line);
+                        record_stats($result, $elapsed) if defined $result && defined $elapsed;
+                    }
+                }
+            }
+            elsif ($fh == $socket)
+            {
+                $client_socket = $socket->accept();
+                next unless $client_socket;
+
+                $child_count = scalar keys %children;
+                if ($child_count >= $maxworkers)
+                {
+                    ErrorLog("WARNING: max workers reached ($maxworkers), rejecting connection");
+                    $client_socket->close();
+                    next;
                 }
 
-                if( not $_->is_running() )
+                my $pid = fork();
+                if (!defined $pid)
                 {
-                    splice(@clients,$counter,1);
+                    ErrorLog("fork failed: $!");
+                    $client_socket->close();
+                    next;
                 }
 
-                $counter++;
+                if ($pid == 0)
+                {
+                    # Child process
+                    close $stats_reader;
+                    $socket->close();
+                    clientHandler($client_socket, $stats_writer);
+                    exit(0);
+                }
+                else
+                {
+                    # Parent process
+                    $client_socket->close();
+                    $children{$pid} = 1;
+                    ErrorLog("active workers: " . scalar(keys %children)) if $debug;
+                }
             }
         }
+
+        $last_stats_time = maybe_print_stats($last_stats_time);
     }
     $socket->close();
     return 1;
@@ -203,8 +232,7 @@ sub Main
 
 sub clientHandler
 {
-    # Socket is passed to thread as first (and only) argument.
-    my ($client_socket) = @_;
+    my ($client_socket, $stats_writer) = @_;
     my $t0 = [gettimeofday];
 
     my $req_id = generate_request_id();
@@ -216,8 +244,7 @@ sub clientHandler
 
     ErrorLog( $req_id, "accepted connection from ".$user{peer_address}.":".$user{peer_port}, $t0 ) if $debug;
 
-    # Create a per-thread agent to avoid thread-safety issues
-    my $thread_agent = create_agent();
+    my $agent = create_agent();
     ErrorLog( $req_id, "agent created", $t0 ) if $debug;
 
     # Read email data from socket first to isolate read time from check time
@@ -238,7 +265,7 @@ sub clientHandler
 
     # Wrap checkit in eval to catch exceptions (e.g. connection refused to Razor servers)
     eval {
-        $ret = $thread_agent->checkit(\%hashr);
+        $ret = $agent->checkit(\%hashr);
     };
     ErrorLog( $req_id, "checkit done", $t0 ) if $debug;
 
@@ -263,12 +290,12 @@ sub clientHandler
     print $client_socket $string;
 
     my $elapsed = tv_interval($t0);
-    record_stats($logret{$ret}, $elapsed);
+    # Send stats to parent process via pipe
+    print $stats_writer "$logret{$ret} $elapsed\n";
     ErrorLog( $req_id, sprintf("result: %s", $logret{$ret}), $t0 ) if $debug;
 
     $client_socket->shutdown(2);
     ErrorLog( $req_id, "connection closed", $t0 ) if $debug;
-    threads->exit();
 }
 
 sub ErrorLog
