@@ -15,7 +15,7 @@ razorfy expects raw mails to be sent to the TCP socket. razorfy checks the mail 
 
 - **TCP socket interface** – Accepts raw email messages over a TCP socket, making it easy to integrate with mail filters like [Rspamd](https://github.com/rspamd/rspamd).
 - **Razor spam detection** – Checks each email against the [Vipul's Razor](http://razor.sourceforge.net/) distributed spam detection network.
-- **Multi-threaded** – Handles multiple concurrent connections using Perl threads with a configurable thread limit.
+- **Multi-process** – Handles multiple concurrent connections using forked worker processes with a configurable limit.
 - **Fail-safe classification** – If the Razor check fails or throws an exception, the message is classified as ham to prevent false positives.
 - **Periodic statistics** – Logs aggregated stats (total, ham, spam, error counts, and timing) at a configurable interval.
 - **Dual-stack networking** – Supports binding to IPv4, IPv6, or dual-stack addresses.
@@ -28,7 +28,7 @@ Razorfy is configured through environment variables, typically set in `/etc/razo
 | Variable | Default | Description |
 |---|---|---|
 | `RAZORFY_DEBUG` | `0` | Set to `1` to enable debug logging. |
-| `RAZORFY_MAXTHREADS` | `200` | Maximum number of concurrent worker threads. |
+| `RAZORFY_MAXTHREADS` | `200` | Maximum number of concurrent worker processes. |
 | `RAZORFY_BINDADDRESS` | `127.0.0.1` | Address to bind the TCP listener to. Use `::` for dual-stack, `0.0.0.0` for all IPv4, `::1` for IPv6 localhost. |
 | `RAZORFY_BINDPORT` | `11342` | TCP port to listen on. |
 | `RAZORFY_RAZORHOME` | `~/.razor` | Path to the Razor configuration/home directory. |
@@ -83,13 +83,13 @@ Have a look to the commented razorfy.conf.
 Set `RAZORFY_DEBUG=1` and have a look to the logs `journalctl -u razorfy`
 
 # Development
-For development it's recommended to create a virtual environment with a thread capable perl using [perlbrew](https://perlbrew.pl/).
+For development it's recommended to create a virtual environment using [perlbrew](https://perlbrew.pl/).
 
 ## Initialize environment
 ```
-perlbrew --notest install perl-5.38.2 --as=perl-5.38.2t -Dusethreads
-perlbrew lib create perl-5.38.2t@razorfy
-perlbrew use perl-5.38.2t@razorfy
+perlbrew --notest install perl-5.38.2
+perlbrew lib create perl-5.38.2@razorfy
+perlbrew use perl-5.38.2@razorfy
 perlbrew install-cpanm
 cpanm --with-develop --installdeps .
 ```
@@ -99,7 +99,7 @@ cpanm --with-develop --installdeps .
 
 ## Enable environment in this terminal
 ```
-perlbrew use perl-5.38.2t@razorfy
+perlbrew use perl-5.38.2@razorfy
 ```
 
 ## Disable environment
