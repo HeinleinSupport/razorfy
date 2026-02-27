@@ -43,13 +43,48 @@ The Perl Razor package is able to return more detailed results. We will maybe al
 [http://razor.sourceforge.net/](http://razor.sourceforge.net/)
 
 ### What is Vipul's Razor?
+>
 > Vipul's Razor is a distributed, collaborative, spam detection and filtering network. Through user contribution, Razor establishes a distributed and constantly updating catalogue of spam in propagation that is consulted by email clients to filter out known spam. Detection is done with statistical and randomized signatures that efficiently spot mutating spam content. User input is validated through reputation assignments based on consensus on report and revoke assertions which in turn is used for computing confidence values associated with individual signatures.
+
+## Rspamd Integration
+
+Razorfy is designed to be used as a Razor backend for [Rspamd](https://github.com/rspamd/rspamd) via the [external_services](https://docs.rspamd.com/modules/external_services/#razor-specific-details) module.
+
+### Rspamd Configuration
+
+Add the following to `/etc/rspamd/local.d/external_services.conf`:
+
+~~~nginx
+razor {
+  servers = "127.0.0.1:11342";
+
+  # messages larger than 4 MB are not scanned
+  # max_size = 4000000;
+
+  # connection timeout in seconds
+  # timeout = 3;
+
+  # number of retransmits on temporary failure
+  # retransmits = 1;
+
+  # cache results in Redis for 2 hours
+  # cache_expire = 7200;
+}
+~~~
+
+Restart Rspamd to apply the configuration:
+
+~~~bash
+systemctl restart rspamd
+~~~
+
+The `RAZOR` symbol will be set based on the result returned by razorfy (`spam` or `ham`).
 
 # Default Installation
 
 ## Install Perl razor and perl-IO-Socket-IP
 
--   use cpan, apt, yum, zypper or the source to install the Perl version of razor and perl-IO-Socket-IP
+- use cpan, apt, yum, zypper or the source to install the Perl version of razor and perl-IO-Socket-IP
 
 ~~~
 apt install razor libio-socket-ip-perl
@@ -61,14 +96,15 @@ yum install perl-Razor-Agent perl-IO-Socket-IP
 
 ## Install razorfy
 
--   clone or download this repo
--   **add the user and group razorfy** or edit razorfy.service to use any other existing user/group
--   edit razorfy.conf to fit your needs
--   copy razorfy.pl daemon file to /usr/local/bin
--   copy razorfy.conf to /etc
--   copy the systemd service file razorfy.service to /etc/systemd/system
--   enable and unmask the Service
-~~~
+- clone or download this repo
+- **add the user and group razorfy** or edit razorfy.service to use any other existing user/group
+- edit razorfy.conf to fit your needs
+- copy razorfy.pl daemon file to /usr/local/bin
+- copy razorfy.conf to /etc
+- copy the systemd service file razorfy.service to /etc/systemd/system
+- enable and unmask the Service
+
+~~~bash
 systemctl daemon-reload
 systemctl unmask razorfy.service
 systemctl enable razorfy.service
@@ -83,10 +119,12 @@ Have a look to the commented razorfy.conf.
 Set `RAZORFY_DEBUG=1` and have a look to the logs `journalctl -u razorfy`
 
 # Development
+
 For development it's recommended to create a virtual environment using [perlbrew](https://perlbrew.pl/).
 
 ## Initialize environment
-```
+
+```bash
 perlbrew --notest install perl-5.38.2
 perlbrew lib create perl-5.38.2@razorfy
 perlbrew use perl-5.38.2@razorfy
@@ -96,23 +134,23 @@ cpanm --with-develop --installdeps .
 
 **Hint:** By using `perlbrew available` you can see the available Perl versions and adapt the previous commands if you wish to develop with another version of Perl.
 
-
 ## Enable environment in this terminal
-```
+
+```bash
 perlbrew use perl-5.38.2@razorfy
 ```
 
 ## Disable environment
-```
+
+```bash
 perlbrew switch-off
 ```
 
 ## See if environment is set
-```
+
+```bash
 perlbrew switch
 ```
-
-
 
 # License
 
@@ -120,17 +158,16 @@ Apache-2.0
 
 # Author Information
 
-*   **[Mirko Ludeke](mailto:m.ludeke@heinlein-support.de)** - [mludeke](https://github.com/mludeke)
-*   **[Carsten Rosenberg](mailto:c.rosenberg@heinlein-support.de)** - [c-rosenberg](https://github.com/c-rosenberg)
+- **[Mirko Ludeke](mailto:m.ludeke@heinlein-support.de)** - [mludeke](https://github.com/mludeke)
+- **[Carsten Rosenberg](mailto:c.rosenberg@heinlein-support.de)** - [c-rosenberg](https://github.com/c-rosenberg)
+- **[Andreas Boesen](mailto:boesen@belwue.de)** - [Happy86](https://github.com/Happy86)
 
-~~~
-Heinlein Support GmbH
-Schwedter Str. 8/9b, 10119 Berlin
-
-https://www.heinlein-support.de
-
-Tel: +4930 / 405051-110
-
-Amtsgericht Berlin-Charlottenburg - HRB 93818 B
-Geschäftsführer: Peer Heinlein - Sitz: Berlin
-~~~
+> Heinlein Support GmbH
+> Schwedter Str. 8/9b, 10119 Berlin
+>
+> https://www.heinlein-support.de
+>
+> Tel: +4930 / 405051-110
+>
+> Amtsgericht Berlin-Charlottenburg - HRB 93818 B
+> Geschäftsführer: Peer Heinlein - Sitz: Berlin
