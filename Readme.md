@@ -11,6 +11,29 @@ please report any issues.
 
 razorfy expects raw mails to be sent to the TCP socket. razorfy checks the mail against the Razor packages and returns ham or spam.
 
+## Features
+
+- **TCP socket interface** – Accepts raw email messages over a TCP socket, making it easy to integrate with mail filters like [Rspamd](https://github.com/rspamd/rspamd).
+- **Razor spam detection** – Checks each email against the [Vipul's Razor](http://razor.sourceforge.net/) distributed spam detection network.
+- **Multi-threaded** – Handles multiple concurrent connections using Perl threads with a configurable thread limit.
+- **Fail-safe classification** – If the Razor check fails or throws an exception, the message is classified as ham to prevent false positives.
+- **Periodic statistics** – Logs aggregated stats (total, ham, spam, error counts, and timing) at a configurable interval.
+- **Dual-stack networking** – Supports binding to IPv4, IPv6, or dual-stack addresses.
+- **Systemd integration** – Ships with a systemd service unit including security hardening options.
+
+## Configuration Options
+
+Razorfy is configured through environment variables, typically set in `/etc/razorfy.conf` which is loaded by the systemd service unit.
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAZORFY_DEBUG` | `0` | Set to `1` to enable debug logging. |
+| `RAZORFY_MAXTHREADS` | `200` | Maximum number of concurrent worker threads. |
+| `RAZORFY_BINDADDRESS` | `127.0.0.1` | Address to bind the TCP listener to. Use `::` for dual-stack, `0.0.0.0` for all IPv4, `::1` for IPv6 localhost. |
+| `RAZORFY_BINDPORT` | `11342` | TCP port to listen on. |
+| `RAZORFY_RAZORHOME` | `~/.razor` | Path to the Razor configuration/home directory. |
+| `RAZORFY_STATS_INTERVAL` | `900` | Interval in seconds between statistics log lines (default 15 min). |
+
 ## Future plans
 
 The Perl Razor package is able to return more detailed results. We will maybe also return extended results to Rspamd.

@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
 
 # Copyright (c) 2025, Mirko Ludeke <m.ludeke@heinlein-support.de>
-# Copyright (c) 2025, Carsten Rosenberg <c.rosenberg@heinlein-support.de>
+# Copyright (c) 2026, Carsten Rosenberg <c.rosenberg@heinlein-support.de>
 # Copyright (c) 2023, Andreas Boesen <boesen@belwue.de>
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
