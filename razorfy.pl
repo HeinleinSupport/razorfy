@@ -25,6 +25,157 @@ use POSIX qw(setlocale strftime :sys_wait_h);
 use Time::HiRes qw(gettimeofday tv_interval);
 use Razor2::Client::Agent;
 
+# Subclass of Razor2::Client::Agent that captures detailed check results
+# (confidence, engine matches, signatures) while preserving the original
+# ham/spam/error return value.
+package Razor2::Client::AgentEx;
+use base 'Razor2::Client::Agent';
+
+sub checkit {
+    my ($self, $args) = @_;
+
+    $self->{razorfy_details} = {};
+
+    my $mails = $self->parse_mbox($args);
+    unless ($mails) {
+        $self->{razorfy_details}{error} = 'parse_mbox failed';
+        return 2;
+    }
+
+    my $objects = $self->prepare_objects($mails);
+    unless ($objects) {
+        $self->{razorfy_details}{error} = 'prepare_objects failed';
+        return 2;
+    }
+
+    foreach my $obj (@$objects) {
+        if ($self->local_check($obj)) {
+            $obj->{skipme} = 1;
+            $obj->{spam} = 0;
+        }
+    }
+
+    unless ($self->get_server_info()) {
+        $self->{razorfy_details}{error} = 'get_server_info failed';
+        return 2;
+    }
+
+    my $sigs = $self->compute_sigs($objects);
+    unless ($sigs) {
+        $self->{razorfy_details}{error} = 'compute_sigs failed';
+        return 2;
+    }
+
+    $self->{razorfy_details}{server}  = $self->{s}{ip} || 'unknown';
+    $self->{razorfy_details}{min_cf}  = $self->{s}{min_cf};
+    $self->{razorfy_details}{engines} = join(',', sort keys %{$self->{s}{engines} || {}});
+    $self->{razorfy_details}{sigs}    = $sigs;
+
+    my @goodones;
+    foreach my $obj (@$objects) {
+        push @goodones, $obj unless $obj->{skipme};
+    }
+
+    unless (@goodones) {
+        $self->log(4, "Done. No valid mail or signatures to check.");
+        return 1;
+    }
+
+    return 1 if $self->{conf}{simulate};
+
+    $self->{s}{list} = $self->{s}{catalogue};
+    $self->nextserver();
+    $self->connect()        or return 2;
+    $self->check(\@goodones) or return 2;
+    $self->disconnect()     or return 2;
+
+    # Capture per-object and per-part details
+    my @obj_details;
+    my $has_spam = 0;
+
+    foreach my $obj (@$objects) {
+        $obj->{spam} = 0 if $obj->{skipme};
+        $obj->{spam} = 0 unless defined $obj->{spam};
+
+        my %detail = (
+            spam       => $obj->{spam},
+            whitelisted => $obj->{skipme} ? 1 : 0,
+        );
+
+        my @parts;
+        if ($obj->{p}) {
+            foreach my $objp (@{$obj->{p}}) {
+                my %part = ( id => $objp->{id}, spam => $objp->{spam} || 0 );
+
+                # Capture per-engine responses (cf, p, ct)
+                if ($objp->{resp} && ref $objp->{resp} eq 'ARRAY') {
+                    my @resps;
+                    for my $i (0 .. $#{$objp->{resp}}) {
+                        my $resp = $objp->{resp}[$i];
+                        next unless ref $resp eq 'HASH';
+                        my %r = ( p => $resp->{p} );
+                        $r{cf}  = $resp->{cf}  if defined $resp->{cf};
+                        $r{ct}  = $resp->{ct}  if defined $resp->{ct};
+                        $r{err} = $resp->{err} if defined $resp->{err};
+                        # Engine info from corresponding sent query
+                        if ($objp->{sent} && $objp->{sent}[$i] && ref $objp->{sent}[$i] eq 'HASH') {
+                            $r{engine} = $objp->{sent}[$i]{e};
+                        }
+                        push @resps, \%r;
+                    }
+                    $part{responses} = \@resps;
+                }
+                push @parts, \%part;
+            }
+        }
+        $detail{parts} = \@parts;
+        push @obj_details, \%detail;
+
+        $has_spam = 1 if $obj->{spam} > 0;
+    }
+
+    $self->{razorfy_details}{objects} = \@obj_details;
+
+    return $has_spam ? 0 : 1;
+}
+
+sub get_razor_details { return $_[0]->{razorfy_details} || {} }
+
+# Format details as a human-readable log string
+sub format_details {
+    my ($self) = @_;
+    my $d = $self->{razorfy_details} || {};
+    return "error=$d->{error}" if $d->{error};
+
+    my @parts;
+    push @parts, "server=$d->{server}" if $d->{server};
+    push @parts, "engines=[$d->{engines}]" if $d->{engines};
+    push @parts, "min_cf=$d->{min_cf}" if defined $d->{min_cf};
+
+    if ($d->{sigs} && @{$d->{sigs}}) {
+        push @parts, sprintf("sigs=%d", scalar @{$d->{sigs}});
+    }
+
+    if ($d->{objects}) {
+        for my $obj (@{$d->{objects}}) {
+            for my $part (@{$obj->{parts} || []}) {
+                for my $resp (@{$part->{responses} || []}) {
+                    my $info = sprintf("part=%s e%s p=%s",
+                        $part->{id} // '?', $resp->{engine} // '?', $resp->{p} // '?');
+                    $info .= " cf=$resp->{cf}" if defined $resp->{cf};
+                    $info .= " ct=$resp->{ct}" if defined $resp->{ct};
+                    $info .= " err=$resp->{err}" if defined $resp->{err};
+                    push @parts, $info;
+                }
+            }
+        }
+    }
+
+    return join(' ', @parts);
+}
+
+package main;
+
 sub generate_request_id
 {
     return sprintf("%08x", int(rand(0xFFFFFFFF)));
@@ -88,9 +239,11 @@ sub maybe_print_stats
     my $total = $ham + $spam + $error;
     my $avg_time = $total > 0 ? $total_time / $total : 0;
 
+    my $ham_pct = $total > 0 ? ($ham / $total) * 100 : 0;
+    my $spam_pct = $total > 0 ? ($spam / $total) * 100 : 0;
     ErrorLog(sprintf(
-        "STATS period=%ds total=%d ham=%d spam=%d error=%d avg=%.3fs min=%.3fs max=%.3fs",
-        $stats_interval, $total, $ham, $spam, $error, $avg_time, $min_time, $max_time
+        "STATS period=%ds total=%d ham=%d (%.1f%%) spam=%d (%.1f%%) error=%d avg=%.3fs min=%.3fs max=%.3fs",
+        $stats_interval, $total, $ham, $ham_pct, $spam, $spam_pct, $error, $avg_time, $min_time, $max_time
     ));
 
     return $now;
@@ -98,7 +251,7 @@ sub maybe_print_stats
 
 sub create_agent
 {
-    my $agent = new Razor2::Client::Agent('razor-check') or die "Failed to create Razor2 agent";
+    my $agent = new Razor2::Client::AgentEx('razor-check') or die "Failed to create Razor2 agent";
     my %read_opts;
     $read_opts{'home'} = $razorhome if defined $razorhome;
     $agent->read_options(%read_opts) or die $agent->errstr ."\n";
@@ -268,6 +421,12 @@ sub clientHandler
         $ret = $agent->checkit(\%hashr);
     };
     ErrorLog( $req_id, "checkit done", $t0 ) if $debug;
+
+    # Log detailed Razor results (always, not just in debug mode)
+    eval {
+        my $details = $agent->format_details();
+        ErrorLog($req_id, "RAZOR $details", $t0) if $details;
+    };
 
     if ( $@ )
     {

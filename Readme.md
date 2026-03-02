@@ -17,7 +17,8 @@ razorfy expects raw mails to be sent to the TCP socket. razorfy checks the mail 
 - **Razor spam detection** – Checks each email against the [Vipul's Razor](http://razor.sourceforge.net/) distributed spam detection network.
 - **Multi-process** – Handles multiple concurrent connections using forked worker processes with a configurable limit.
 - **Fail-safe classification** – If the Razor check fails or throws an exception, the message is classified as ham to prevent false positives.
-- **Periodic statistics** – Logs aggregated stats (total, ham, spam, error counts, and timing) at a configurable interval.
+- **Periodic statistics** – Logs aggregated stats (total, ham, spam with percentage breakdown, error counts, and timing) at a configurable interval.
+- **Detailed result logging** – Captures and logs per-engine Razor results (confidence factor, engine number, signature count) for every checked message via the `Razor2::Client::AgentEx` subclass.
 - **Dual-stack networking** – Supports binding to IPv4, IPv6, or dual-stack addresses.
 - **Systemd integration** – Ships with a systemd service unit including security hardening options.
 
@@ -31,12 +32,8 @@ Razorfy is configured through environment variables, typically set in `/etc/razo
 | `RAZORFY_MAXTHREADS` | `200` | Maximum number of concurrent worker processes. |
 | `RAZORFY_BINDADDRESS` | `127.0.0.1` | Address to bind the TCP listener to. Use `::` for dual-stack, `0.0.0.0` for all IPv4, `::1` for IPv6 localhost. |
 | `RAZORFY_BINDPORT` | `11342` | TCP port to listen on. |
-| `RAZORFY_RAZORHOME` | `~/.razor` | Path to the Razor configuration/home directory. |
+| `RAZORFY_RAZORHOME` | `~/.razorfy` | Path to the Razor configuration/home directory. |
 | `RAZORFY_STATS_INTERVAL` | `900` | Interval in seconds between statistics log lines (default 15 min). |
-
-## Future plans
-
-The Perl Razor package is able to return more detailed results. We will maybe also return extended results to Rspamd.
 
 ## Razor
 
